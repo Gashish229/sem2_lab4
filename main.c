@@ -1,227 +1,133 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include <locale.h>
+#include "bitstruct.h"
+#include "matrix2d.h"
+#include "contqueue.h"
 
-// --- НАША СТРУКТУРА ДАННЫХ (Вариант 2 - Пиксель экрана) ---
-// #pragma pack(push, 1) отключает выравнивание памяти. 
-// Преподавателю: "Я использовал это, чтобы в бинарном файле структура занимала ровно 6 байт без пустых мест (padding)".
-#pragma pack(push, 1)
-typedef struct {
-    unsigned char r;          // Красный цвет (0-255)
-    unsigned char g;          // Зеленый цвет (0-255)
-    unsigned char b;          // Синий цвет (0-255)
-    unsigned char brightness; // Яркость
-    unsigned short temp;      // Температура цвета
-} rgbled;
-#pragma pack(pop)
+// Определим фиксированный размер матрицы для сохранения, 
+// чтобы fseek работал по формуле (индекс * размер_блока)
+#define SAVE_ROWS 2
+#define SAVE_COLS 2
 
-// --- ФУНКЦИИ ДЛЯ РАБОТЫ С ТЕКСТОВЫМ ФАЙЛОМ (на оценку "3") ---
-
-// Сохранение в текстовый файл
-void save_text(const char* filename, int count) {
-    // Открываем файл для записи текста ("w" - write)
-    FILE *file = fopen(filename, "w");
-    if (!file) {
-        printf("Ошибка: не удалось открыть файл для записи!\n");
-        return;
-    }
-
-    // Пишем сначала количество элементов (чтобы при чтении знать, сколько их)
-    fprintf(file, "%d\n", count);
-
-    for (int i = 0; i < count; i++) {
-        // Генерируем случайный пиксель
-        rgbled led;
-        led.r = rand() % 256;
-        led.g = rand() % 256;
-        led.b = rand() % 256;
-        led.brightness = rand() % 100;
-        led.temp = 3000 + (rand() % 4000); // от 3000 до 7000 Кельвинов
-
-        // Записываем данные в строчку через пробел
-        fprintf(file, "%d %d %d %d %d\n", led.r, led.g, led.b, led.brightness, led.temp);
-    }
-    fclose(file); // Всегда закрываем файл!
-    printf("Успешно сохранено %d элементов в текстовый файл %s\n", count, filename);
+/* Преподавателю: "Чтобы fseek работал на 4 балла, размер записи в файле должен быть постоянным.
+   Одна запись у нас содержит: 
+   - 2 целых числа (строки/столбцы)
+   - 4 числа float (данные матрицы 2x2)
+   - структуру rgbled (побитовые поля)
+*/
+size_t get_record_size() {
+    return (sizeof(int) * 2) + (sizeof(float) * SAVE_ROWS * SAVE_COLS) + sizeof(rgbled);
 }
 
-// Извлечение конкретного элемента из текстового файла
-// Преподавателю: "В текстовом файле строки могут быть разной длины, поэтому fseek тут не поможет. 
-// Приходится читать файл построчно с самого начала до нужного индекса."
-rgbled* get_element_from_text_file(const char* filename, int index) {
-    FILE *file = fopen(filename, "r"); // "r" - чтение
-    if (!file) return NULL;
+// --- ФУНКЦИИ ФАЙЛОВОГО ВВОДА/ВЫВОДА (ПР №4) ---
 
-    int total_count;
-    fscanf(file, "%d", &total_count); // Читаем общее количество
+// Сохранение всей очереди в бинарный файл
+void save_queue_bin(const char* filename, contqueue* q) {
+    FILE* f = fopen(filename, "wb");
+    if (!f) return;
 
-    // Если индекс больше, чем есть элементов
-    if (index < 0 || index >= total_count) {
-        fclose(file);
-        return NULL; 
-    }
+    int count = contqueue_size(q);
+    fwrite(&count, sizeof(int), 1, f); // Пишем кол-во элементов в начало
 
-    // Выделяем память под результат
-    rgbled* result = (rgbled*)malloc(sizeof(rgbled));
-
-    // Идем по файлу, пока не дойдем до нужного индекса
-    for (int i = 0; i <= index; i++) {
-        int r, g, b, bright, temp;
-        // Читаем данные элемента
-        fscanf(file, "%d %d %d %d %d", &r, &g, &b, &bright, &temp);
+    // Временная очередь для обхода (чтобы не испортить основную)
+    contqueue* temp_q = contqueue_create();
+    
+    while (!contqueue_is_empty(q)) {
+        matrix2d* mat = contqueue_dequeue(q);
         
-        // Если это нужный нам индекс, сохраняем в структуру
-        if (i == index) {
-            result->r = r; result->g = g; result->b = b;
-            result->brightness = bright; result->temp = temp;
+        // Пишем метаданные
+        fwrite(&mat->rows, sizeof(int), 1, f);
+        fwrite(&mat->cols, sizeof(int), 1, f);
+        
+        // Пишем данные самой матрицы (все float подряд)
+        for(int i = 0; i < mat->rows; i++) {
+            fwrite(mat->data[i], sizeof(float), mat->cols, f);
         }
-    }
-    fclose(file);
-    return result;
-}
-
-// Вывод всего текстового файла (команда list)
-void list_text(const char* filename) {
-    FILE *file = fopen(filename, "r");
-    if (!file) {
-        printf("Ошибка чтения файла!\n");
-        return;
-    }
-
-    int count;
-    fscanf(file, "%d", &count);
-    printf("В файле хранится элементов: %d\n", count);
-
-    for (int i = 0; i < count; i++) {
-        int r, g, b, bright, temp;
-        fscanf(file, "%d %d %d %d %d", &r, &g, &b, &bright, &temp);
-        printf("[%d] RGB(%d, %d, %d), Яркость: %d, Темп: %dK\n", i, r, g, b, bright, temp);
-    }
-    fclose(file);
-}
-
-// --- ФУНКЦИИ ДЛЯ РАБОТЫ С БИНАРНЫМ ФАЙЛОМ (на оценку "4") ---
-
-// Сохранение в бинарный файл
-// Преподавателю: "Здесь используется 'wb' (write binary). Я сохраняю элементы сразу 
-// блоком памяти через fwrite, это намного быстрее и эффективнее, чем текст."
-void save_binary(const char* filename, int count) {
-    FILE *file = fopen(filename, "wb");
-    if (!file) {
-        printf("Ошибка создания бинарного файла!\n");
-        return;
-    }
-
-    // Сначала записываем количество элементов (1 штука размером с int)
-    fwrite(&count, sizeof(int), 1, file);
-
-    for (int i = 0; i < count; i++) {
-        rgbled led;
-        led.r = rand() % 256; led.g = rand() % 256; led.b = rand() % 256;
-        led.brightness = rand() % 100; led.temp = 3000 + (rand() % 4000);
         
-        // Записываем структуру целиком в двоичном виде
-        fwrite(&led, sizeof(rgbled), 1, file);
+        // Пишем встроенную структуру rgbled (ПР №2)
+        fwrite(mat->display_pixel, sizeof(rgbled), 1, f);
+        
+        contqueue_enqueue(temp_q, mat); // Сохраняем для восстановления
     }
-    fclose(file);
-    printf("Успешно сохранено %d элементов в БИНАРНЫЙ файл %s\n", count, filename);
+    
+    // Возвращаем элементы обратно в основную очередь
+    while (!contqueue_is_empty(temp_q)) {
+        contqueue_enqueue(q, contqueue_dequeue(temp_q));
+    }
+    
+    contqueue_destroy(temp_q);
+    fclose(f);
+    printf("Очередь сохранена в бинарный файл: %s\n", filename);
 }
 
-// Специфическая функция из задания на 4
-// Преподавателю: "Это самая важная функция для 4 баллов. Мы используем fseek.
-// Сначала пропускаем sizeof(int) (там хранится количество), а затем прыгаем 
-// сразу на нужный элемент: index * element_size. Так работает произвольный доступ!"
-void get_element_from_binary_file(const char* filename, int index, size_t element_size, void* result) {
-    FILE *file = fopen(filename, "rb"); // "rb" - read binary
-    if (!file) {
-        printf("Ошибка открытия файла!\n");
+// Загрузка i-го элемента из бинарного файла (Задание на 4 - использование fseek)
+void get_matrix_bin(const char* filename, int index) {
+    FILE* f = fopen(filename, "rb");
+    if (!f) return;
+
+    int total;
+    fread(&total, sizeof(int), 1, f);
+
+    if (index < 0 || index >= total) {
+        printf("Ошибка: индекс %d вне диапазона (всего %d)\n", index, total);
+        fclose(f);
         return;
     }
 
-    int total_count;
-    fread(&total_count, sizeof(int), 1, file); // Читаем сколько всего штук
+    // Вычисляем смещение: заголовок (int) + индекс * размер одной записи
+    long offset = sizeof(int) + (index * get_record_size());
+    fseek(f, offset, SEEK_SET);
 
-    if (index < 0 || index >= total_count) {
-        printf("Ошибка: Индекс выходит за границы файла (всего %d)\n", total_count);
-        fclose(file);
-        return;
+    // Читаем данные обратно в объекты
+    int r, c;
+    fread(&r, sizeof(int), 1, f);
+    fread(&c, sizeof(int), 1, f);
+    
+    matrix2d* mat = matrix2d_create(r, c);
+    for(int i = 0; i < r; i++) {
+        fread(mat->data[i], sizeof(float), c, f);
     }
+    fread(mat->display_pixel, sizeof(rgbled), 1, f);
 
-    // Вычисляем позицию: пропускаем 1 int (счетчик) + пропускаем (index) элементов
-    long offset = sizeof(int) + (index * element_size);
-    
-    // Сдвигаем курсор файла на вычисленную позицию (SEEK_SET значит от начала файла)
-    fseek(file, offset, SEEK_SET);
+    printf("--- Извлечена матрица [%d] ---\n", index);
+    matrix2d_print(mat);
+    printf("Цвет (R): %d, Режим: %d\n", mat->display_pixel->r, mat->display_pixel->op_mode);
 
-    // Считываем один элемент прямо в указатель result
-    fread(result, element_size, 1, file);
-    
-    fclose(file);
+    matrix2d_destroy(mat);
+    fclose(f);
 }
 
-// --- ГЛАВНАЯ ФУНКЦИЯ И ОБРАБОТКА КОМАНДНОЙ СТРОКИ ---
-int main(int argc, char *argv[]) {
-    srand(time(NULL)); // Инициализация генератора случайностей
+// --- MAIN С ОБРАБОТКОЙ АРГУМЕНТОВ ---
 
-    // Проверяем, что передано хотя бы 3 аргумента (например: ./main save data.txt)
+int main(int argc, char* argv[]) {
+    setlocale(LC_ALL, "");
+
     if (argc < 3) {
-        printf("Использование:\n");
-        printf("  ./main save <filename>      - сгенерировать и сохранить в текст\n");
-        printf("  ./main list <filename>      - вывести текстовый файл\n");
-        printf("  ./main get <index> <file>   - получить элемент из текста\n");
-        printf("  ./main savebin <filename>   - сохранить в бинарный файл\n");
-        printf("  ./main getbin <index> <file>- получить из бинарного файла\n");
-        return 1;
+        printf("Инструкция:\n");
+        printf("  %s save <файл> - создать очередь и сохранить\n", argv[0]);
+        printf("  %s get <индекс> <файл> - достать элемент через fseek\n", argv[0]);
+        return 0;
     }
 
-    char *command = argv[1];
-
-    // Обработка команды "save" (Текст)
-    if (strcmp(command, "save") == 0) {
-        char *filename = argv[2];
-        save_text(filename, 5); // Для примера генерируем 5 элементов
-    } 
-    // Обработка команды "list" (Текст)
-    else if (strcmp(command, "list") == 0) {
-        char *filename = argv[2];
-        list_text(filename);
-    }
-    // Обработка команды "get" (Текст)
-    else if (strcmp(command, "get") == 0) {
-        if (argc < 4) { printf("Укажите индекс!\n"); return 1; }
-        int index = atoi(argv[2]); // Переводим текст в число
-        char *filename = argv[3];
+    if (strcmp(argv[1], "save") == 0) {
+        contqueue* q = contqueue_create();
         
-        rgbled* led = get_element_from_text_file(filename, index);
-        if (led) {
-            printf("Текстовый элемент %d: RGB(%d,%d,%d) Яркость:%d Темп:%d\n", 
-                   index, led->r, led->g, led->b, led->brightness, led->temp);
-            free(led); // Очищаем память
-        } else {
-            printf("Элемент не найден.\n");
+        // Создаем пару матриц 2x2 ( фиксированный размер для ПР4)
+        for (int i = 0; i < 3; i++) {
+            matrix2d* m = matrix2d_create(SAVE_ROWS, SAVE_COLS);
+            matrix2d_fill_random(m);
+            m->display_pixel->r = 50 * (i + 1); // Просто для теста цвета
+            contqueue_enqueue(q, m);
         }
-    }
-    // Обработка команды "savebin" (Бинарный)
-    else if (strcmp(command, "savebin") == 0) {
-        char *filename = argv[2];
-        save_binary(filename, 5);
-    }
-    // Обработка команды "getbin" (Бинарный)
-    else if (strcmp(command, "getbin") == 0) {
-        if (argc < 4) { printf("Укажите индекс!\n"); return 1; }
-        int index = atoi(argv[2]);
-        char *filename = argv[3];
-
-        rgbled led; // Сюда запишем результат
-        // Вызываем функцию строго по условию из "Задания на 4"
-        get_element_from_binary_file(filename, index, sizeof(rgbled), &led);
         
-        printf("Бинарный элемент %d: RGB(%d,%d,%d) Яркость:%d Темп:%d\n", 
-               index, led.r, led.g, led.b, led.brightness, led.temp);
-    }
-    else {
-        printf("Неизвестная команда!\n");
+        save_queue_bin(argv[2], q);
+        contqueue_destroy(q);
+    } 
+    else if (strcmp(argv[1], "get") == 0 && argc == 4) {
+        int idx = atoi(argv[2]);
+        get_matrix_bin(argv[3], idx);
     }
 
     return 0;
