@@ -1,8 +1,16 @@
-CC=gcc
-CFLAGS=-Wall -std=c11
+CC = gcc
+CFLAGS = -Wall -std=c99
 
-all:
-	$(CC) $(CFLAGS) main.c bitstruct.c matrix2d.c contqueue.c -o main -lm
+all: cmdcalc
+
+cmdcalc: cmdcalc.o stack.o
+	$(CC) $(CFLAGS) -o cmdcalc cmdcalc.o stack.o
+
+cmdcalc.o: cmdcalc.c stack.h
+	$(CC) $(CFLAGS) -c cmdcalc.c
+
+stack.o: stack.c stack.h
+	$(CC) $(CFLAGS) -c stack.c
 
 clean:
-	rm -f main *.bin
+	rm -f *.o cmdcalc
