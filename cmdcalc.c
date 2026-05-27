@@ -4,48 +4,45 @@
 #include <string.h>
 #include "stack.h"
 
-// Определение приоритета: умножение и деление (2) выше сложения и вычитания (1)
+// 1. Определение приоритета операций (для оценки "4")
 int get_precedence(char op) {
     if (op == '+' || op == '-') return 1;
     if (op == '*' || op == '/') return 2;
     return 0;
 }
 
-// Выполнение операции: берем два числа, применяем оператор и кладем результат обратно
+// 2. Выполнение одной операции из стека
 void process_op(Stack *s) {
-    double v2 = pop_num(s); // Извлекаем второе число (оно было введено позже)
-    double v1 = pop_num(s); // Извлекаем первое число
-    char op = pop_op(s);    // Извлекаем оператор
-    switch(op) {
-        case '+': push_num(s, v1 + v2); break;
-        case '-': push_num(s, v1 - v2); break;
-        case '*': push_num(s, v1 * v2); break;
-        case '/': push_num(s, v1 / v2); break;
-    }
+    double v2 = pop_num(s); // Второе число
+    double v1 = pop_num(s); // Первое число
+    char op = pop_op(s);    // Оператор
+
+    if (op == '+') push_num(s, v1 + v2);
+    if (op == '-') push_num(s, v1 - v2);
+    if (op == '*') push_num(s, v1 * v2);
+    if (op == '/') push_num(s, v1 / v2);
 }
 
 int main(int argc, char *argv[]) {
-    // Простейшая проверка аргументов
     if (argc < 2) {
-        printf("Использование: %s \"выражение\"\n", argv[0]);
+        printf("Ошибка: передайте выражение в кавычках\n");
         return 1;
     }
 
     char *expr = argv[1];
-    Stack *s = create_stack(strlen(expr));
+    Stack *s = create_stack(strlen(expr)); // Динамическое выделение памяти
 
-    for (int i = 0; expr[i]; i++) {
-        // Пропускаем пробелы в выражении
-        if (isspace(expr[i])) continue;
+    // 3. Главный цикл обработки строки
+    for (int i = 0; expr[i] != '\0'; i++) {
+        if (isspace(expr[i])) continue; // Игнорируем пробелы
 
-        // Если это число (или дробное), считываем его
         if (isdigit(expr[i]) || expr[i] == '.') {
-            // strtod считывает double и автоматически двигает указатель i
-            push_num(s, strtod(&expr[i], &expr[i]));
-            i--; // Корректируем цикл, так как strtod уже сдвинул i
+            // Исправленное чтение числа (без предупреждений компилятора)
+            char *endptr;
+            push_num(s, strtod(&expr[i], &endptr));
+            i = endptr - expr - 1; 
         } else {
-            // Если приоритет текущего оператора <= приоритета оператора в стеке,
-            // сначала выполняем операцию из стека
+            // Если пришел оператор, проверяем приоритеты
             while (!is_empty_op(s) && get_precedence(peek_op(s)) >= get_precedence(expr[i])) {
                 process_op(s);
             }
@@ -53,13 +50,14 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Выполняем оставшиеся операции в стеке
+    // 4. Выполняем все оставшиеся операции
     while (!is_empty_op(s)) {
         process_op(s);
     }
 
-    // Результат — единственное число, оставшееся в стеке
-    printf("%g\n", pop_num(s));
-    free_stack(s);
+    // Вывод итогового результата
+    printf("Результат: %g\n", pop_num(s));
+    
+    free_stack(s); // Очистка памяти
     return 0;
 }
